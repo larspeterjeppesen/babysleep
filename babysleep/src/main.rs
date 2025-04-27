@@ -8,6 +8,11 @@ use sdl2::{
     event::Event, keyboard::Keycode, libc::sleep, mouse::MouseButton, pixels::Color, rect::Rect, render::{self, Canvas, Texture, TextureCreator}, ttf::{self, Font}, video::{self, Window, WindowContext}
 };
 
+
+const WINDOW_WIDTH: u32 = 800;
+const WINDOW_HEIGHT:u32 = 600;
+
+
 #[derive(PartialEq)]
 enum DisplayState {
     Standby,
@@ -15,28 +20,56 @@ enum DisplayState {
 }
 
 
-struct AppData<'a> {
+struct TextureData<'a> {
     font: Font<'a, 'static>,
     texture_creator: TextureCreator<WindowContext>,
-    // canvas: Canvas<Window>
-    // clock_texture: Texture<'a>
 }
 
-struct Button<'a> 
-// where F: FnMut() -> ()
-{
+
+struct VisualAsset<'a> {
     rect: Rect,
-    texture: Option<Texture<'a>>,
     background_color: Color,
-    // button_press: F,
-    // button_press: impl FnMut()
+    texture: Option<Texture<'a>>,
+    text_color: Option<Color>,
 }
 
-// struct Timer {
-//     start: Option<SystemTime>,
-//     end: Option<SystemTime>,
-//     rect: Rect, 
-// }
+impl<'a> VisualAsset<'a> {
+
+    fn build(rect: Rect, background_color: Color, text: Option<String>, text_color: Option<Color>, data: Option<&'a TextureData>) -> Result<VisualAsset<'a>, Box<dyn Error>> {
+        let texture = match (text, text_color) {
+            (None, _) => None,
+            (Some(_), None) => return Err("Text color is required when supplying text when buildng a VisualAsset".into()),
+            (Some(text), Some(text_color)) => {
+                match data {
+                    None => return Err("TextureData needed to build VisualAsset with text".into()),
+                    Some(data) => Some(create_text_texture(data, text, text_color)?),
+                }
+            },
+        };
+
+        let asset  = VisualAsset {
+            rect, 
+            background_color, 
+            texture, 
+            text_color,
+        };
+        Ok(asset)
+    }
+
+    fn update_texture(&mut self, data: &'a TextureData, text: String, text_color: Option<Color>) -> Result<(), Box<dyn Error>> {
+        if self.text_color == None {
+            match text_color {
+                None => return Err("asset does not contain a text color. Supply one when calling update_texture".into()),
+                Some(text_color) => self.text_color = Some(text_color),
+            }
+        }
+        let texture: Texture<'a> = create_text_texture(data, text, self.text_color.unwrap())?;
+        self.texture = Some(texture);
+
+        Ok(())
+    }
+}
+
 
 struct SleepPeriod {
     start: Option<Instant>,
@@ -45,7 +78,7 @@ struct SleepPeriod {
 }
 
 
-fn create_text_texture<'a>(data: &'a AppData, text: String, color: Color) ->  Result<render::Texture<'a>, Box<dyn Error>>{
+fn create_text_texture<'a>(data: &'a TextureData, text: String, color: Color) ->  Result<render::Texture<'a>, Box<dyn Error>>{
     let surface = data.font
     .render(text.as_str())
     .blended(color)
@@ -96,7 +129,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let video_subsystem = sdl_context.video()?;
 
     let window = video_subsystem
-        .window("babyalarm", 800, 600)
+        .window("babyalarm", WINDOW_WIDTH, WINDOW_HEIGHT)
         .opengl()
         .build()
         .map_err(|e| e.to_string())?;
@@ -114,52 +147,61 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let mut font: Font<'_, 'static> = ttf_context.load_font(font_path, 128)?;
     font.set_style(ttf::FontStyle::BOLD);
 
-    let data: AppData = AppData { font, texture_creator };
+    let data: TextureData = TextureData { font, texture_creator };
 
     let mut state: DisplayState = DisplayState::Standby;
 
-    // Start button
-    let background_color: Color = Color::RGBA(0,255,0,0);
-    let text_color: Color = Color::RGBA(255,0,0,255);
-    let start_timer_texture = create_text_texture(&data, "Start".to_string(), text_color)?;
-    let start_button_rect = Rect::new(100, 100, 200, 100);
+    let background_color: Color = Color::RGBA(50,50,200,255);
 
-    // Running timer
-    let running_timer_rect= Rect::new(250, 200, 350, 150);
-    let start_time_rect = Rect::new(100, 100, 200, 125);
+    let start_timer_button: VisualAsset = VisualAsset::build(
+        Rect::new(100,100,200,100),
+        Color::RGBA(0,255,0,255),
+        Some("Start".to_string()),
+        Some(Color::RGBA(255,0,0,255)),
+        Some(&data)
+    )?;
 
+    let stop_timer_button: VisualAsset = VisualAsset::build(
+        Rect::new(150,100,WINDOW_WIDTH-75, WINDOW_HEIGHT-150),
+        Color::RGBA(255,0,0,255),
+        Some("Stop".to_string()),
+        Some(Color::RGBA(255,0,0,255)),
+        Some(&data)
+    )?;
 
-    // Clock
-    let clock_rect = Rect::new(700, 0, 100, 50);
+    let timer_visual: VisualAsset = VisualAsset::build(
+        Rect::new(250,200,350,150),
+        Color::RGBA(0,0,0,255),
+        None,
+        Some(Color::RGBA(255,255,255,255)),
+        None
+    )?;
+
+    let time_started_visual: VisualAsset = VisualAsset::build(
+        Rect::new(100,100,200,125),
+        Color::RGBA(0,0,0,255),
+        None,
+        Some(Color::RGBA(255,255,255,255)),
+        None
+    )?;
+
+    let mut clock_visual: VisualAsset = VisualAsset::build(
+        Rect::new(700,0,100,50),
+        Color::RGBA(0,0,0,255),
+        None,
+        Some(Color::RGBA(255,255,255,255)),
+        None
+    )?;
 
     // Timer
     let mut sleep_period: SleepPeriod = SleepPeriod { start: None, end: None, start_time: None};
-
-
-    // let button_press = || {
-    //     state = DisplayState::RunTimer;
-    //     if timer.end == None {
-    //         timer.start = Some(SystemTime::now());
-    //     } else {
-    //         timer
-    //     }
-    // };
-
-    let start_timer_button: Button = Button { 
-        rect: start_button_rect, 
-        texture: Some(start_timer_texture), 
-        background_color,
-        // button_press
-    };
-
-
 
 
     canvas.set_draw_color(Color::RGBA(0,0,255,0));
     canvas.clear();
 
     canvas.set_draw_color(start_timer_button.background_color);
-    canvas.fill_rect(start_button_rect)?;
+    canvas.fill_rect(start_timer_button.rect)?;
     canvas.copy(&start_timer_button.texture.unwrap(), None, start_timer_button.rect)?;
     canvas.present();
 
@@ -209,8 +251,8 @@ pub fn main() -> Result<(), Box<dyn Error>> {
                 
                 let rect_color = Color::RGBA(0, 0, 0, 255);
                 canvas.set_draw_color(rect_color);
-                canvas.fill_rect(running_timer_rect)?;
-                canvas.copy(&running_timer_texture, None, running_timer_rect)?;
+                canvas.fill_rect(timer_visual.rect)?;
+                canvas.copy(&running_timer_texture, None, timer_visual.rect)?;
 
                 // Draw the time the clock was started
                 let duration_since_epoch= sleep_period.start_time.unwrap().duration_since(SystemTime::UNIX_EPOCH)?;
@@ -219,8 +261,8 @@ pub fn main() -> Result<(), Box<dyn Error>> {
                 let start_time_texture = create_text_texture(&data, start_time, text_color)?;
                 let rect_color = Color::RGBA(0,0,0,255); 
                 canvas.set_draw_color(rect_color);
-                canvas.fill_rect(start_time_rect)?;
-                canvas.copy(&start_time_texture, None, start_time_rect)?;
+                canvas.fill_rect(time_started_visual.rect)?;
+                canvas.copy(&start_time_texture, None, time_started_visual.rect)?;
 
 
             }
@@ -228,20 +270,19 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
         // Draw clock
         let current_time: String= get_current_time()?;
-        let text_color: Color = Color::RGBA(255,255,255,255);
-        let clock_texture = create_text_texture(&data, current_time, text_color)?;
-        let rect_color = Color::RGBA(0,0,0,0);
-        canvas.set_draw_color(rect_color);
-        canvas.fill_rect(clock_rect)?;
-        canvas.copy(&clock_texture, None, clock_rect)?;
+        // let text_color: Color = Color::RGBA(255,255,255,255);
+        clock_visual.update_texture(&data, current_time, None);
+        // let clock_texture = create_text_texture(&data, current_time, text_color)?;
+        // let rect_color = Color::RGBA(0,0,0,0);
+
+        canvas.set_draw_color(clock_visual.background_color);
+        canvas.fill_rect(clock_visual.rect)?;
+        canvas.copy(&(clock_visual.texture.unwrap()), None, clock_visual.rect)?;
 
         canvas.present();
         thread::sleep(Duration::from_millis(100));
 
 
-
-        // canvas.set_draw_color(color);
-        // // canvas.fill_rect(rect)?;
 
     }
 
